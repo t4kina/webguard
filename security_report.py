@@ -20,6 +20,7 @@ Uso:
 import argparse
 import base64
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -34,7 +35,9 @@ from rich.table import Table
 from rich import box
 from rich.rule import Rule
 
-console = Console()
+_term_cols = shutil.get_terminal_size((100, 40)).columns
+CONSOLE_WIDTH = max(60, min(_term_cols, 100) - 2)
+console = Console(width=CONSOLE_WIDTH)
 
 # ─────────────────────────────────────────────
 # Estructuras de datos
@@ -66,14 +69,6 @@ SEVERITY_STYLE = {
     "LOW":      "bold green",
     "INFO":     "bold cyan",
 }
-SEVERITY_EMOJI = {
-    "CRITICAL": "🔴",
-    "HIGH":     "🟠",
-    "MEDIUM":   "🟡",
-    "LOW":      "🟢",
-    "INFO":     "🔵",
-}
-SCORE_PENALTY = {"CRITICAL": 25, "HIGH": 10, "MEDIUM": 4, "LOW": 1, "INFO": 0}
 
 # ─────────────────────────────────────────────
 # Utilidades
@@ -319,11 +314,6 @@ def run_zap(url: str, auth: str | None = None, docker_network: str | None = None
         ]
 
         if auth:
-            # Escribimos un fichero de contexto XML con el replacer configurado.
-            # ZAP lo carga con -n al arrancar — es el método más fiable para
-            # Basic Auth a nivel de servidor (nginx/apache) porque el header
-            # Authorization se inyecta en TODAS las peticiones sin depender
-            # de scripts externos ni del parser de -z.
             auth_header = build_auth_header(auth)
             ctx_container_path = write_zap_context(tmpdir, url, auth_header)
             cmd += ["-n", ctx_container_path]
@@ -364,28 +354,6 @@ def run_zap(url: str, auth: str | None = None, docker_network: str | None = None
     return result
 
 
-# ─────────────────────────────────────────────
-# Puntuación
-# ─────────────────────────────────────────────
-
-def calculate_score(results: list[ScanResult]) -> int:
-    score = 100
-    for r in results:
-        for f in r.findings:
-            score -= SCORE_PENALTY.get(f.severity, 0)
-    return max(0, score)
-
-
-def score_verdict(score: int) -> tuple[str, str]:
-    if score >= 80:
-        return "✅  APTO para producción",         "bold green"
-    elif score >= 60:
-        return "⚠️   Revisar antes de publicar",    "bold yellow"
-    elif score >= 40:
-        return "🚨  NO recomendado — riesgo alto",  "bold orange1"
-    else:
-        return "🛑  BLOQUEADO — riesgo crítico",    "bold red"
-
 
 # ─────────────────────────────────────────────
 # Renderizado
@@ -395,7 +363,6 @@ def render_report(
     url: str,
     path: str,
     results: list[ScanResult],
-    score: int,
     auth: bool = False,
     docker_network: str | None = None,
     trivy_image: str | None = None,
@@ -410,74 +377,51 @@ def render_report(
     for f in all_findings:
         counts[f.severity] = counts.get(f.severity, 0) + 1
 
-    verdict, verdict_style = score_verdict(score)
-    score_color = (
-        "green"   if score >= 80 else
-        "yellow"  if score >= 60 else
-        "orange1" if score >= 40 else
-        "red"
-    )
-
     console.print()
-    console.print(Rule("[bold cyan]🔐  SECURITY REPORT[/bold cyan]", style="cyan"))
+    console.print(Rule("[bold cyan]SECURITY REPORT[/bold cyan]", style="cyan"))
     console.print()
 
     # ── Cabecera ──────────────────────────────────────────────────────────────
-    info = Table(box=None, show_header=False, padding=(0, 2))
-    info.add_column(style="dim", width=14)
-    info.add_column()
+    info = Table(box=None, show_header=False, padding=(0, 2), expand=True)
+    info.add_column(style="dim", width=14, no_wrap=True)
+    info.add_column(overflow="fold")
     info.add_row("Objetivo",     f"[bold white]{url}[/bold white]")
     if trivy_image:
         info.add_row("Trivy imagen", f"[cyan]{trivy_image}[/cyan]")
     else:
         info.add_row("Ruta local",   f"[white]{Path(path).resolve()}[/white]")
-    info.add_row("Herramientas", "Trivy · OWASP ZAP")
-    info.add_row("Basic Auth",   "[green]✓ configurado[/green]" if auth else "[dim]no[/dim]")
+    info.add_row("Herramientas", "Trivy / OWASP ZAP")
+    info.add_row("Basic Auth",   "[green]configurado[/green]" if auth else "[dim]no[/dim]")
     info.add_row("Docker net",   f"[cyan]{docker_network}[/cyan]" if docker_network else "[dim]no[/dim]")
-    console.print(Panel(info, title="📋  Escaneo", border_style="cyan"))
-    console.print()
-
-    # ── Puntuación ────────────────────────────────────────────────────────────
-    bar_fill  = "█" * (score // 5)
-    bar_empty = "░" * (20 - score // 5)
-    console.print(Panel(
-        f"\n  [{score_color}]{score:>3}/100[/{score_color}]  "
-        f"[{score_color}]{bar_fill}[/{score_color}][dim]{bar_empty}[/dim]\n\n"
-        f"  [{verdict_style}]{verdict}[/{verdict_style}]\n",
-        title="🏆  Puntuación de Seguridad",
-        border_style=score_color,
-    ))
+    console.print(Panel(info, title="Escaneo", border_style="cyan"))
     console.print()
 
     # ── Resumen por severidad ─────────────────────────────────────────────────
-    sev_table = Table(box=box.ROUNDED, header_style="bold white", border_style="dim")
-    sev_table.add_column("Severidad", width=12)
-    sev_table.add_column("Hallazgos", justify="center", width=12)
-    sev_table.add_column("−Puntos",   justify="center", width=10)
+    sev_table = Table(box=box.SIMPLE_HEAD, header_style="bold white", expand=True)
+    sev_table.add_column("Severidad", ratio=1)
+    sev_table.add_column("Hallazgos", justify="center", ratio=1)
 
     for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
-        n       = counts.get(sev, 0)
-        penalty = SCORE_PENALTY[sev] * n
-        style   = SEVERITY_STYLE[sev]
+        n     = counts.get(sev, 0)
+        style = SEVERITY_STYLE[sev]
         sev_table.add_row(
-            f"[{style}]{SEVERITY_EMOJI[sev]} {sev}[/{style}]",
+            f"[{style}]{sev}[/{style}]",
             f"[{style}]{n}[/{style}]",
-            f"[dim]-{penalty}[/dim]" if penalty else "[dim]0[/dim]",
         )
 
-    console.print(Panel(sev_table, title="📊  Resumen", border_style="dim"))
+    console.print(Panel(sev_table, title="Resumen", border_style="dim"))
     console.print()
 
     # ── Estado herramientas ───────────────────────────────────────────────────
-    tool_table = Table(box=box.SIMPLE, header_style="bold white")
-    tool_table.add_column("Herramienta", width=14)
-    tool_table.add_column("Estado",      width=10)
-    tool_table.add_column("Hallazgos",   justify="center", width=12)
-    tool_table.add_column("Duración",    justify="right",  width=10)
-    tool_table.add_column("Error",       style="dim red")
+    tool_table = Table(box=box.SIMPLE, header_style="bold white", expand=True)
+    tool_table.add_column("Herramienta", ratio=3, no_wrap=True)
+    tool_table.add_column("Estado",      ratio=2, no_wrap=True)
+    tool_table.add_column("Hallazgos",   justify="center", ratio=2)
+    tool_table.add_column("Duración",    justify="right",  ratio=2, no_wrap=True)
+    tool_table.add_column("Error",       ratio=5, style="dim red", overflow="fold")
 
     for r in results:
-        status = "[green]✓ OK[/green]" if r.success else "[red]✗ Error[/red]"
+        status = "[green]OK[/green]" if r.success else "[red]Error[/red]"
         tool_table.add_row(
             f"[bold]{r.tool}[/bold]",
             status,
@@ -486,7 +430,7 @@ def render_report(
             r.error[:60] if r.error else "",
         )
 
-    console.print(Panel(tool_table, title="🛠️   Herramientas", border_style="dim"))
+    console.print(Panel(tool_table, title="Herramientas", border_style="dim"))
     console.print()
 
     # ── Hallazgos detallados ──────────────────────────────────────────────────
@@ -497,15 +441,15 @@ def render_report(
             box=box.MINIMAL_DOUBLE_HEAD, header_style="bold white",
             border_style=border, expand=True,
         )
-        t.add_column("Sev",      width=12)
-        t.add_column("Tool",     width=10)
-        t.add_column("Hallazgo", ratio=2)
-        t.add_column("Detalle",  ratio=3, style="dim")
+        t.add_column("Sev",      ratio=2, no_wrap=True)
+        t.add_column("Tool",     ratio=2, no_wrap=True)
+        t.add_column("Hallazgo", ratio=5, overflow="fold")
+        t.add_column("Detalle",  ratio=7, style="dim", overflow="fold")
 
         for f in findings:
             style = SEVERITY_STYLE.get(f.severity, "white")
             t.add_row(
-                f"[{style}]{SEVERITY_EMOJI[f.severity]} {f.severity}[/{style}]",
+                f"[{style}]{f.severity}[/{style}]",
                 f"[dim]{f.tool}[/dim]",
                 f.title[:70],
                 f.description[:80] if f.description else "",
@@ -520,18 +464,18 @@ def render_report(
     hidden = len(medium_low) + len(info_only)
 
     if critical_high:
-        render_findings(f"🚨  Críticos y Altos ({len(critical_high)})", critical_high, "red")
+        render_findings(f"Críticos y Altos ({len(critical_high)})", critical_high, "red")
     elif not all_findings:
         console.print(Panel(
-            "\n  [bold green]¡Sin hallazgos detectados![/bold green] 🎉\n",
+            "\n  [bold green]¡Sin hallazgos detectados![/bold green]\n",
             border_style="green",
         ))
 
     if show_all:
         if medium_low:
-            render_findings(f"⚠️   Medios y Bajos ({len(medium_low)})", medium_low, "yellow")
+            render_findings(f"Medios y Bajos ({len(medium_low)})", medium_low, "yellow")
         if info_only:
-            render_findings(f"🔵  Informativos ({len(info_only)})", info_only, "cyan")
+            render_findings(f"Informativos ({len(info_only)})", info_only, "cyan")
     elif hidden:
         console.print(
             f"[dim]  + {hidden} hallazgos de severidad MEDIUM/LOW/INFO omitidos "
@@ -599,7 +543,7 @@ ejemplos:
 
     console.print()
     console.print(Panel(
-        "[bold cyan]🔐  Mini Security Scanner[/bold cyan]\n"
+        "[bold cyan]Mini Security Scanner[/bold cyan]\n"
         "[dim]Trivy (local o imagen) · OWASP ZAP (staging)[/dim]",
         border_style="cyan", expand=False,
     ))
@@ -609,17 +553,17 @@ ejemplos:
     if not args.skip_trivy:
         if args.trivy_image:
             tasks.append((
-                f"🔍 Trivy — imagen {args.trivy_image}",
+                f"Trivy — imagen {args.trivy_image}",
                 lambda: run_trivy_image(args.trivy_image),
             ))
         else:
             tasks.append((
-                "🔍 Trivy — dependencias, secrets y misconfigs",
+                "Trivy — dependencias, secrets y misconfigs",
                 lambda: run_trivy_fs(args.path),
             ))
     if not args.skip_zap:
         tasks.append((
-            "🕷️  ZAP — escaneo web pasivo",
+            "ZAP — escaneo web pasivo",
             lambda: run_zap(args.url, auth=args.auth, docker_network=args.network),
         ))
 
@@ -633,12 +577,11 @@ ejemplos:
             tid = progress.add_task(desc, total=None)
             r   = fn()
             results.append(r)
-            icon = "✓" if r.success else "✗"
+            icon = "[green]✓[/green]" if r.success else "[red]✗[/red]"
             progress.update(tid, description=f"{icon} {desc}", completed=True)
 
-    score = calculate_score(results)
     render_report(
-        args.url, args.path, results, score,
+        args.url, args.path, results,
         auth=bool(args.auth),
         docker_network=args.network,
         trivy_image=args.trivy_image,

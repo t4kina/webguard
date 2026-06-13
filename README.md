@@ -12,7 +12,7 @@ python security_report.py --url https://staging.my-app.com --path ./my-project
 
 ## What it does
 
-webguard runs two scanners in sequence and produces a unified security report with a 0–100 score and a clear production verdict.
+webguard runs two scanners in sequence and produces a unified security report listing all detected vulnerabilities grouped by severity.
 
 **🔍 Trivy — local project**
 Scans your codebase for CVEs in dependencies (npm, pip, go, maven, composer…), exposed secrets (API keys, tokens, hardcoded credentials) and misconfigurations in Dockerfile, docker-compose, Terraform and Kubernetes files.
@@ -67,21 +67,6 @@ python security_report.py --url https://staging.my-app.com --path . --all
 | `--all` | Show all findings including MEDIUM, LOW and INFO | false |
 | `--skip-trivy` | Skip Trivy scan | false |
 | `--skip-zap` | Skip ZAP scan | false |
-
----
-
-## Scoring
-
-Starts at 100 and deducts points per finding. By default only CRITICAL and HIGH findings are shown — use `--all` to see everything.
-
-| Score | Verdict |
-|-------|---------|
-| 80–100 | ✅ Ready for production |
-| 60–79 | ⚠️ Review before publishing |
-| 40–59 | 🚨 Not recommended |
-| 0–39 | 🛑 Blocked — critical risk |
-
-Penalty per finding: **CRITICAL −25 · HIGH −10 · MEDIUM −4 · LOW −1**
 
 ---
 
