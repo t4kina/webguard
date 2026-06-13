@@ -59,7 +59,7 @@ python security_report.py --url https://staging.my-app.com --path . --all
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--url` | Target URL for ZAP scan (**required**) | — |
+| `--url` | Target URL for ZAP scan (required unless `--skip-zap`) | — |
 | `--path` | Local project path for Trivy filesystem scan | `.` |
 | `--trivy-image` | Scan a Docker image instead of a local folder | — |
 | `--auth` | Basic Auth credentials (`user:password`) | — |

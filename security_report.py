@@ -511,8 +511,8 @@ ejemplos:
   %(prog)s --url http://dvwa:80 --network security-scan --trivy-image vulnerables/web-dvwa
         """,
     )
-    parser.add_argument("--url",  required=True,
-                        help="URL a escanear con ZAP")
+    parser.add_argument("--url", default=None,
+                        help="URL a escanear con ZAP (obligatorio salvo con --skip-zap)")
     parser.add_argument("--path", default=".",
                         help="Carpeta local del proyecto para Trivy fs (default: .)")
     parser.add_argument("--trivy-image", default=None, metavar="IMAGEN",
@@ -529,7 +529,11 @@ ejemplos:
                         help="Mostrar todos los hallazgos incluyendo MEDIUM, LOW e INFO")
     args = parser.parse_args()
 
-    if not args.url.startswith("http"):
+    if not args.skip_zap and not args.url:
+        console.print("[red]--url es obligatorio si no usas --skip-zap[/red]")
+        sys.exit(1)
+
+    if args.url and not args.url.startswith("http"):
         console.print("[red]La URL debe empezar por http:// o https://[/red]")
         sys.exit(1)
 
